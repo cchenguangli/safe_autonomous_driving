@@ -1777,7 +1777,7 @@ Speed units have been standardized to m/s
         # lane keeping
         r_lane = 1.0 * math.exp(-3.5 * abs(lat_error)) + 0.2 * (1/(1+3*abs(yaw_diff)))
 #        print(f"re={0.8 * math.exp(-6 * abs(lat_error))}     ")
-        base   = 0.7 * (1.0 - min(1.0, abs(speed_now - v_des) / max(1.0, self.max_speed)))
+        base   = 0.6 * (1.0 - min(1.0, abs(speed_now - v_des) / max(1.0, self.max_speed)))
         over   = -0.7 * max(0.0, speed_now - self.max_speed) / max(1.0, self.max_speed)
         r_speed_track = base + over
 
