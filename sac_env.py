@@ -80,7 +80,8 @@ Speed units have been standardized to m/s
         self.spawn_points   = self.map.get_spawn_points()
 
         self.max_lat_error = 4.5                # m
-        self.max_speed     = 30.0 / 3.6       
+        self.max_speed     = 30.0 / 3.6   
+        self.speed_limit_max = 120.0 / 3.6      # m/s，    
 
 
         
@@ -112,11 +113,11 @@ Speed units have been standardized to m/s
             
             
         low  = np.array(
-            [-3.0, 0.0, -1.0, -1.0, -1.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0],
+            [-3.0, 0.0, -1.0, -1.0, -1.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0],
             dtype=np.float32
         )
         high = np.array(
-            [ 3.0, 10.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            [ 3.0, 20.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
             dtype=np.float32
         )
         self.observation_space = spaces.Box(low=low, high=high, dtype=np.float32)
@@ -143,9 +144,9 @@ Speed units have been standardized to m/s
         
       
         self.stuck_counter = 0
-        self.IDLE_STEP_PENALTY = -0.3   # Penalty for each step when stopping without external cause
+        self.IDLE_STEP_PENALTY = -0.4   # Penalty for each step when stopping without external cause
         self.STUCK_RESET_STEPS = 50    # How many consecutive steps constitute a stop and reset
-        self.STUCK_RESET_PENALTY = -30  # One-time penalty 
+        self.STUCK_RESET_PENALTY = -50  # One-time penalty 
         self.IDLE_V_THRESH = 1.0      
        
        
@@ -559,7 +560,7 @@ Speed units have been standardized to m/s
             self.vehicle.get_transform().location,
             project_to_road=False,
             lane_type=carla.LaneType.Driving)
-        return (valid_wp is None) and (abs(lat_error) > self.max_lat_error)
+        return (valid_wp is None) and (abs(lat_error) > 2.5)
     
     
     
@@ -1536,25 +1537,27 @@ Speed units have been standardized to m/s
         
         
     def desired_speed_from_curve(self, future_h):
-        future_h_abs = abs(float(future_h))
-        max_v = self.max_speed
 
-       
+        future_h_abs = abs(float(future_h))
+#        max_v = self.max_speed
+            
         try:
             limit_kph = self.vehicle.get_speed_limit()
-            if limit_kph is not None and limit_kph > 0:
-                max_v = float(limit_kph) / 3.6
         except Exception:
-            pass
+            limit_kph = None
 
-       
+        if (limit_kph is None) or (limit_kph <= 0.0):
+            max_v = 30.0 / 3.6
+        else:
+            max_v = 0.9 * (limit_kph / 3.6)
         self.max_speed = max_v
 
-   
+
         if future_h_abs > 0.25:
             v_des = 0.8 * max_v
         else:
             v_des = max_v
+
 
         return v_des
             
@@ -1775,7 +1778,7 @@ Speed units have been standardized to m/s
         v_des = self.desired_speed_from_curve(future_h)
 
         # lane keeping
-        r_lane = 1.0 * math.exp(-3.5 * abs(lat_error)) + 0.2 * (1/(1+3*abs(yaw_diff)))
+        r_lane = 1.0 * math.exp(-2.5 * abs(lat_error)) + 0.2 * (1/(1+3*abs(yaw_diff)))
 #        print(f"re={0.8 * math.exp(-6 * abs(lat_error))}     ")
         base   = 0.6 * (1.0 - min(1.0, abs(speed_now - v_des) / max(1.0, self.max_speed)))
         over   = -0.7 * max(0.0, speed_now - self.max_speed) / max(1.0, self.max_speed)
@@ -1784,7 +1787,7 @@ Speed units have been standardized to m/s
         dsteer  = abs(self.last_steer - getattr(self, "_prev_steer", self.last_steer))
         prev_yaw_diff = getattr(self, "_prev_yaw_diff", yaw_diff)
         yaw_rate = abs(yaw_diff - prev_yaw_diff)
-        r_smooth = (-0.65 * dsteer - 0.50 * yaw_rate)
+        r_smooth = (-0.70 * dsteer - 0.50 * yaw_rate)
 
         self._prev_steer    = self.last_steer
         self._prev_yaw_diff = yaw_diff
@@ -2113,7 +2116,7 @@ Speed units have been standardized to m/s
             
         if not terminated and self.is_off_lane():
             print("Went off the drivable lane. Resetting.")
-            reward -= 10.0
+            reward -= 50.0
             terminated = True
 
         if not terminated:
@@ -2123,7 +2126,7 @@ Speed units have been standardized to m/s
                 self.offroute_count = 0
             if self.offroute_count >= 10:
                 print("Deviating from the established route.")
-                reward -= 10.0
+                reward -= 50.0
                 terminated = True             
         if not terminated and self.step_count >= self.max_episode_steps:
                 truncated = True
@@ -2191,10 +2194,19 @@ Speed units have been standardized to m/s
         ped_gap_norm = float(scan.get("ped_gap", self.GAP_CLIP)) / self.GAP_CLIP
 #        print(f"[OBS_RAW] traffic light={sdist_eff:.2f} m, stopline={stop_sdist_eff:.2f} m, pedes={float(scan.get('ped_gap', self.GAP_CLIP)):.2f} m")
 
+                
+        try:
+            limit_kph = self.vehicle.get_speed_limit()
+            if (limit_kph is None) or (limit_kph <= 0):
+                limit_kph = 30.0   
+        except Exception:
+            limit_kph = 30.0
+        limit_mps = limit_kph / 3.6
+        speed_limit_norm = min(1.0, limit_mps / self.speed_limit_max)
 
         obs = [
             lat_error / 3.5,
-            speed / self.max_speed,
+            3.6*speed / 30,
             max(-1.0, min(1.0, yaw_diff / math.pi)),
             max(-1.0, min(1.0, future_h)),
             steer,
@@ -2206,6 +2218,7 @@ Speed units have been standardized to m/s
             right_ok,
             ped_gap_norm, 
             stop_sdist_norm,
+            speed_limit_norm, 
         ]
         return np.array(obs, dtype=np.float32)
 
